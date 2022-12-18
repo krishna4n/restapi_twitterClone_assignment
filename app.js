@@ -8,7 +8,6 @@ const dbPath = path.join(__dirname, "twitterClone.db");
 const { open } = require("sqlite");
 const sqlite3 = require("sqlite3");
 const format = require("date-fns/format");
-const isValid = require("date-fns/isValid");
 let db = null;
 const initiateDBAndServer = async () => {
   try {
@@ -80,12 +79,12 @@ const authenticateToken = (request, response, next) => {
   }
   if (jwtToken === undefined) {
     response.status(401);
-    response.send("Invalid Request");
+    response.send("Invalid JWT Token");
   } else {
     jwt.verify(jwtToken, "MY_SECRET_TOKEN", async (error, payload) => {
       if (error) {
         response.status(401);
-        response.send("Invalid Request");
+        response.send("Invalid JWT Token");
       } else {
         request.username = payload.username;
         request.userId = payload.userId;
@@ -95,7 +94,7 @@ const authenticateToken = (request, response, next) => {
   }
 };
 
-app.get("/user/tweets/feed/", async (request, response) => {
+app.get("/user/tweets/feed/", authenticateToken, async (request, response) => {
   getQuery =
     "select tweet,user from follower inner join user on follower.follower_user_id = user.user_id order by follower.follower_id desc limit 4";
   const data = await db.all(getQuery);
@@ -116,19 +115,17 @@ const capitalizeString = (name) => {
   return newWord.trim();
 };
 
-app.get("/user/following/", async (request, response) => {
-  getQuery =
-    "select * from follower left join user on follower.follower_user_id = user.user_id";
+app.get("/user/following/", authenticateToken, async (request, response) => {
+  getQuery = `select * from follower inner join user on follower.follower_user_id = user.user_id where follower.following_user_id ='${request.userId}'`;
   const data = await db.all(getQuery);
   const dataList = data.map((each) => ({
     name: capitalizeString(each.name),
   }));
   response.send(dataList);
 });
-// have to interchage these querys if these test cases were failed
-app.get("/user/followers/", async (request, response) => {
-  getQuery =
-    "select * from follower left join user on follower.following_user_id = user.user_id order by user.user_id asc";
+
+app.get("/user/followers/", authenticateToken, async (request, response) => {
+  getQuery = `select * from follower inner join user on follower.follower_user_id = user.user_id where follower.following_user_id = '${request.userId}'`;
   const data = await db.all(getQuery);
   console.log(data);
   const dataList = data.map((each) => ({
@@ -157,7 +154,7 @@ app.get(
   authenticateToken,
   async (request, response) => {
     const { tweetId } = request.params;
-    getFollowingQuery = `select * from follower where following_user_id='${request.userId}'`;
+    getFollowingQuery = `select * from follower where following_user_id='${request.userId} and tweet_id ='${tweetId}'`;
 
     isFollows = await db.get(getFollowingQuery);
     if (isFollows === undefined) {
@@ -174,7 +171,7 @@ app.get(
   authenticateToken,
   async (request, response) => {
     const { tweetId } = request.params;
-    getFollowingQuery = `select * from follower where following_user_id='${request.userId}'`;
+    getFollowingQuery = `select * from follower where following_user_id='${request.userId}' and tweet_id='${tweetId}'`;
     isFollows = await db.get(getFollowingQuery);
     if (isFollows === undefined) {
       response.status(401);
@@ -192,7 +189,7 @@ app.get(
 );
 
 app.get("/user/tweets/", authenticateToken, async (request, response) => {
-  getQuery = `select tweet,count(distinct reply_id) as replies,count(distinct like_id) as likes,date_time as dateTime  from tweet inner join like on tweet.tweet_id = like.tweet_id inner join reply on reply.tweet_id = tweet.tweet_id group by tweet.user_id having tweet.user_id = '${request.userId}'`;
+  getQuery = `select tweet,count(distinct reply_id) as replies,count(distinct like_id) as likes,date_time as dateTime  from tweet join like on tweet.tweet_id = like.tweet_id join reply on reply.tweet_id = tweet.tweet_id group by tweet.tweet_id having tweet.user_id = '${request.userId}'`;
   console.log(getQuery);
   const data = await db.all(getQuery);
   response.send(data);
@@ -200,9 +197,36 @@ app.get("/user/tweets/", authenticateToken, async (request, response) => {
 
 app.post("/user/tweets/", authenticateToken, async (request, response) => {
   const user_id = request.userId;
-  const convertedDate = new Date();
+  const convertedDate = format(new Date(), "yyyyy-MM-dd hh:mm:ss");
   const { tweet } = request.body;
-  recordTweet = `insert into tweet(tweet,user_id,date_time) vales('${tweet}','${user_id}','${convertedDate}')`;
-  await db.run(recordTweet);
+  recordTweet = `insert into tweet(tweet,user_id,date_time) values('${tweet}','${user_id}','${convertedDate}')`;
+  console.log(recordTweet);
+  const saveRecord = await db.run(recordTweet);
+  console.log(saveRecord);
   response.send("Created a Tweet");
 });
+
+app.delete(
+  "/tweets/:tweetId/",
+  authenticateToken,
+  async (request, response) => {
+    const { tweetId } = request.params;
+    getUser = `select * from tweet where user_id='${request.userId}' and tweet_id='${tweetId}'`;
+    console.log(getUser);
+    const isOwnTweet = await db.get(getUser);
+    console.log(isOwnTweet);
+    if (isOwnTweet === undefined) {
+      response.status(401);
+      response.send("Invalid Request");
+    } else {
+      deleteQuery = `delete from tweet where tweet_id='${tweetId}'`;
+
+      console.log(deleteQuery);
+      const delStatus = await db.run(deleteQuery);
+      console.log(delStatus);
+      response.send("Tweet Removed");
+    }
+  }
+);
+
+module.exports = app;
